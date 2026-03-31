@@ -16,7 +16,7 @@ export function useSensorData() {
   const [error, setError] = useState<string | null>(null)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
 
-  const ESP_IP = "192.168.31.197"   // ✅ YOUR IP
+  const ESP_IP = "192.YOUR.IP"   // ✅ YOUR IP
   const endpoint = `http://${ESP_IP}/data`
 
   useEffect(() => {
