@@ -1,0 +1,206 @@
+#include <ESP8266WiFi.h>
+#include <ESP8266WebServer.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <Adafruit_BMP085.h>
+#include <DHT.h>
+
+// ---------------- WIFI ----------------
+const char* ssid = "YOUR_WIFI_NAME";
+const char* password = "YOUR_WIFI_PASSWORD";
+
+ESP8266WebServer server(80);
+
+// ---------------- PINS ----------------
+#define DHTPIN 14
+#define DHTTYPE DHT11
+#define LDRPIN 12
+#define MQ135PIN A0
+#define RED_LED 13
+#define WHITE_LED 16
+#define BLUE_LED 0
+
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+
+// ---------------- OBJECTS ----------------
+DHT dht(DHTPIN, DHTTYPE);
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+Adafruit_BMP085 bmp;
+
+// ---------------- VARIABLES ----------------
+float tempC = 0;
+float humidity = 0;
+float pressure = 0;
+int gasLevel = 0;
+bool isDark = false;
+
+#define GAS_THRESHOLD 600
+
+// Timing
+unsigned long lastSensor = 0;
+unsigned long lastDisplay = 0;
+unsigned long lastBlink = 0;
+
+bool showPage = false;
+bool blueState = false;
+int blinkInterval = 500;
+
+// ---------------- WIFI ----------------
+void connectWiFi() {
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+
+  display.clearDisplay();
+  display.setCursor(0, 10);
+  display.println("Connecting WiFi...");
+  display.display();
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+  }
+
+  display.clearDisplay();
+  display.setCursor(0, 10);
+  display.println("WiFi Connected!");
+  display.setCursor(0, 30);
+  display.print("IP:");
+  display.println(WiFi.localIP());
+  display.display();
+
+  delay(2000);
+}
+
+// ---------------- SENSOR ----------------
+void readSensors() {
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+
+  if (!isnan(t)) tempC = t;
+  if (!isnan(h)) humidity = h;
+
+  pressure = bmp.readPressure() / 100.0;
+
+  gasLevel = analogRead(MQ135PIN);
+  isDark = digitalRead(LDRPIN);
+}
+
+// ---------------- LED ----------------
+void updateLEDs() {
+  digitalWrite(RED_LED, gasLevel > GAS_THRESHOLD);
+  digitalWrite(WHITE_LED, isDark);
+}
+
+// ---------------- DISPLAY ----------------
+String getComfort() {
+  if (tempC > 30 && humidity > 60) return "HOT & HUMID";
+  if (tempC < 18) return "COLD";
+  return "COMFORTABLE";
+}
+
+String getWeather() {
+  if (pressure > 985) return "SUNNY";
+  if (pressure > 978) return "CLOUDY";
+  return "RAIN";
+}
+
+void updateDisplay() {
+  display.clearDisplay();
+
+  if (!showPage) {
+    display.setCursor(0, 0);
+    display.println("SENSOR DATA");
+
+    display.setCursor(0, 16);
+    display.printf("T: %.1fC\n", tempC);
+    display.printf("H: %.1f%%\n", humidity);
+
+    display.setCursor(0, 40);
+    display.printf("P: %.0fhPa\n", pressure);
+
+    display.setCursor(0, 56);
+    display.printf("Gas: %d", gasLevel);
+
+  } else {
+    display.setCursor(0, 0);
+    display.println("SMART STATUS");
+
+    display.setCursor(0, 16);
+    display.println(getComfort());
+
+    display.setCursor(0, 32);
+    display.println(getWeather());
+
+    display.setCursor(0, 48);
+    if (gasLevel > GAS_THRESHOLD)
+      display.println("AIR: POOR!");
+    else
+      display.println("AIR: SAFE");
+  }
+
+  display.display();
+}
+
+// ---------------- WEB SERVER ----------------
+void handleData() {
+  String json = "{";
+  json += "\"temperature\":" + String(tempC) + ",";
+  json += "\"humidity\":" + String(humidity) + ",";
+  json += "\"pressure\":" + String(pressure) + ",";
+  json += "\"airQuality\":" + String(gasLevel) + ",";
+  json += "\"light\":\"" + String(isDark ? "DARK" : "BRIGHT") + "\",";
+  json += "\"status\":\"online\"";
+  json += "}";
+
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.send(200, "application/json", json);
+}
+
+// ---------------- SETUP ----------------
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(LDRPIN, INPUT);
+  pinMode(RED_LED, OUTPUT);
+  pinMode(WHITE_LED, OUTPUT);
+  pinMode(BLUE_LED, OUTPUT);
+
+  dht.begin();
+  bmp.begin();
+
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+
+  connectWiFi();
+
+  server.on("/data", handleData);
+  server.begin();
+}
+
+// ---------------- LOOP ----------------
+void loop() {
+  unsigned long now = millis();
+
+  if (now - lastSensor > 2000) {
+    lastSensor = now;
+    readSensors();
+    updateLEDs();
+  }
+
+  if (now - lastDisplay > 4000) {
+    lastDisplay = now;
+    showPage = !showPage;
+    updateDisplay();
+  }
+
+  if (now - lastBlink > blinkInterval) {
+    lastBlink = now;
+    blueState = !blueState;
+    digitalWrite(BLUE_LED, blueState);
+    blinkInterval = random(100, 1000);
+  }
+
+  server.handleClient();
+}
